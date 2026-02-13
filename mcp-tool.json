@@ -1,0 +1,25 @@
+{
+  "name": "scrape_hackernoon_authors",
+  "description": "Scrapes HackerNoon to find authors writing about vibe coding, indie hackers, solopreneurs, bootstrapped startups, and related topics. Returns author profiles with names, bios, social links (Twitter, LinkedIn, GitHub, website), and sample articles.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "keywords": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Custom search keywords to find relevant articles. Default: vibe coding, indie hacker, solopreneur, solo founder, bootstrapped startup, side project, build in public, solo developer, indie developer, maker"
+      },
+      "tags": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "HackerNoon tag pages to crawl. Default: indie-hackers, solopreneurship, bootstrapping, side-project, startup-lessons, founders, saas, makers"
+      }
+    },
+    "required": []
+  },
+  "endpoint": "POST /api/scrape",
+  "pricing": {
+    "credits": 50,
+    "usd": 0.50
+  }
+}

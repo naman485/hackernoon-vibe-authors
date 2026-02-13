@@ -1,0 +1,32 @@
+{
+  "name": "hackernoon-vibe-authors",
+  "version": "1.0.0",
+  "description": "API to scrape HackerNoon and find authors writing about vibe coding, indie hackers, solopreneurs, and related topics",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "hackernoon",
+    "scraper",
+    "vibe-coding",
+    "indie-hackers",
+    "solopreneur",
+    "createos"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "puppeteer": "^24.37.2"
+  }
+}

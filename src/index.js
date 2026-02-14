@@ -34,8 +34,11 @@ app.get('/', (req, res) => {
     endpoints: [
       { method: 'POST', path: '/api/scrape', description: 'Start a new scrape job' },
       { method: 'GET', path: '/api/results', description: 'Get cached scrape results' },
-      { method: 'GET', path: '/api/status', description: 'Check scrape job status' }
+      { method: 'GET', path: '/api/status', description: 'Check scrape job status' },
+      { method: 'GET', path: '/api/csv', description: 'Download results as CSV' },
+      { method: 'GET', path: '/dashboard', description: 'View results in UI' }
     ],
+    dashboard: '/dashboard',
     docs: '/docs',
     health: '/health',
     mcp: '/mcp-tool.json',
@@ -181,6 +184,457 @@ app.get('/docs', (req, res) => {
   <h2>MCP Integration</h2>
   <pre>GET /mcp-tool.json</pre>
   <p>Fetch the MCP tool definition for AI agent integration.</p>
+</body>
+</html>`);
+});
+
+// GET /dashboard - Data viewer UI
+app.get('/dashboard', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HackerNoon Vibe Authors - Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
+      color: #e4e4e7;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+    .header h1 {
+      font-size: 1.8rem;
+      background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .header-actions { display: flex; gap: 10px; }
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.9rem;
+    }
+    .btn-primary {
+      background: linear-gradient(90deg, #8b5cf6, #7c3aed);
+      color: white;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4); }
+    .btn-secondary {
+      background: #27272a;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+    }
+    .btn-secondary:hover { background: #3f3f46; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Stats Cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .stat-card {
+      background: rgba(39, 39, 42, 0.6);
+      backdrop-filter: blur(10px);
+      border: 1px solid #3f3f46;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .stat-card .label { color: #a1a1aa; font-size: 0.85rem; margin-bottom: 8px; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; color: #fff; }
+    .stat-card .icon { font-size: 1.5rem; float: right; opacity: 0.5; }
+
+    /* Search & Filter */
+    .toolbar {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .search-box {
+      flex: 1;
+      min-width: 250px;
+      padding: 12px 16px;
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      color: #e4e4e7;
+      font-size: 0.95rem;
+    }
+    .search-box:focus { outline: none; border-color: #8b5cf6; }
+    .search-box::placeholder { color: #71717a; }
+
+    /* Table */
+    .table-container {
+      background: rgba(39, 39, 42, 0.6);
+      backdrop-filter: blur(10px);
+      border: 1px solid #3f3f46;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: #18181b;
+      padding: 14px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: #a1a1aa;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    th:hover { color: #8b5cf6; }
+    td {
+      padding: 14px 16px;
+      border-top: 1px solid #27272a;
+      font-size: 0.9rem;
+    }
+    tr:hover td { background: rgba(139, 92, 246, 0.05); }
+
+    /* Social Links */
+    .social-links { display: flex; gap: 8px; }
+    .social-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: #27272a;
+      border-radius: 6px;
+      color: #a1a1aa;
+      text-decoration: none;
+      transition: all 0.2s;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .social-link:hover { background: #8b5cf6; color: white; }
+    .social-link.twitter:hover { background: #1da1f2; }
+    .social-link.linkedin:hover { background: #0077b5; }
+    .social-link.github:hover { background: #333; }
+    .social-link.website:hover { background: #10b981; }
+    .social-link.disabled { opacity: 0.3; pointer-events: none; }
+
+    /* Author Info */
+    .author-name {
+      font-weight: 600;
+      color: #fff;
+      text-decoration: none;
+    }
+    .author-name:hover { color: #8b5cf6; }
+    .author-handle { color: #71717a; font-size: 0.8rem; }
+    .author-bio {
+      color: #a1a1aa;
+      font-size: 0.85rem;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .keywords {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .keyword {
+      background: rgba(139, 92, 246, 0.2);
+      color: #a78bfa;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+    }
+
+    /* Status */
+    .status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 0;
+      color: #71717a;
+      font-size: 0.85rem;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+    }
+    .status-dot.scraping {
+      background: #f59e0b;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #71717a;
+    }
+    .empty-state h3 { color: #a1a1aa; margin-bottom: 10px; }
+
+    /* Loading */
+    .loading {
+      display: flex;
+      justify-content: center;
+      padding: 40px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #27272a;
+      border-top-color: #8b5cf6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .header h1 { font-size: 1.4rem; }
+      th, td { padding: 10px 12px; font-size: 0.8rem; }
+      .author-bio { max-width: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>HackerNoon Vibe Authors</h1>
+      <div class="header-actions">
+        <button class="btn btn-secondary" onclick="downloadCSV()">Download CSV</button>
+        <button class="btn btn-primary" id="scrapeBtn" onclick="startScrape()">Run Scrape</button>
+      </div>
+    </header>
+
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card">
+        <div class="icon">👥</div>
+        <div class="label">Total Authors</div>
+        <div class="value" id="totalAuthors">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">🐦</div>
+        <div class="label">With Twitter</div>
+        <div class="value" id="withTwitter">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">💼</div>
+        <div class="label">With LinkedIn</div>
+        <div class="value" id="withLinkedIn">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">🐙</div>
+        <div class="label">With GitHub</div>
+        <div class="value" id="withGitHub">-</div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" class="search-box" id="searchBox" placeholder="Search authors, bios, keywords..." oninput="filterTable()">
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortTable('name')">Author</th>
+            <th onclick="sortTable('bio')">Bio</th>
+            <th>Social Links</th>
+            <th onclick="sortTable('keywords')">Keywords</th>
+          </tr>
+        </thead>
+        <tbody id="authorsTable">
+          <tr><td colspan="4" class="loading"><div class="spinner"></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Loading...</span>
+      </div>
+      <div id="lastUpdate">-</div>
+    </div>
+  </div>
+
+  <script>
+    let authors = [];
+    let sortField = 'name';
+    let sortAsc = true;
+
+    async function loadData() {
+      try {
+        // Check status first
+        const statusRes = await fetch('/api/status');
+        const status = await statusRes.json();
+
+        updateStatus(status.data);
+
+        if (!status.data.hasCachedResults) {
+          document.getElementById('authorsTable').innerHTML =
+            '<tr><td colspan="4" class="empty-state"><h3>No Data Yet</h3><p>Click "Run Scrape" to find authors</p></td></tr>';
+          return;
+        }
+
+        // Load results
+        const res = await fetch('/api/results');
+        const data = await res.json();
+
+        if (data.success) {
+          authors = data.data.authors;
+          updateStats(data.data.stats);
+          renderTable();
+          document.getElementById('lastUpdate').textContent =
+            'Last updated: ' + new Date(data.meta.cachedAt).toLocaleString();
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById('authorsTable').innerHTML =
+          '<tr><td colspan="4" class="empty-state"><h3>Error loading data</h3></td></tr>';
+      }
+    }
+
+    function updateStats(stats) {
+      document.getElementById('totalAuthors').textContent = stats.totalAuthors || 0;
+      document.getElementById('withTwitter').textContent = stats.withTwitter || 0;
+      document.getElementById('withLinkedIn').textContent = stats.withLinkedIn || 0;
+      document.getElementById('withGitHub').textContent = stats.withGitHub || 0;
+    }
+
+    function updateStatus(status) {
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      const btn = document.getElementById('scrapeBtn');
+
+      if (status.scrapeInProgress) {
+        dot.className = 'status-dot scraping';
+        text.textContent = 'Scraping in progress...';
+        btn.disabled = true;
+        btn.textContent = 'Scraping...';
+        setTimeout(loadData, 5000);
+      } else {
+        dot.className = 'status-dot';
+        text.textContent = 'Ready';
+        btn.disabled = false;
+        btn.textContent = 'Run Scrape';
+      }
+    }
+
+    function renderTable() {
+      const search = document.getElementById('searchBox').value.toLowerCase();
+      let filtered = authors.filter(a =>
+        a.name?.toLowerCase().includes(search) ||
+        a.bio?.toLowerCase().includes(search) ||
+        a.matchedKeywords?.some(k => k.toLowerCase().includes(search))
+      );
+
+      filtered.sort((a, b) => {
+        let valA = a[sortField] || '';
+        let valB = b[sortField] || '';
+        if (sortField === 'keywords') {
+          valA = a.matchedKeywords?.join(',') || '';
+          valB = b.matchedKeywords?.join(',') || '';
+        }
+        return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById('authorsTable').innerHTML =
+          '<tr><td colspan="4" class="empty-state"><h3>No matching authors</h3></td></tr>';
+        return;
+      }
+
+      document.getElementById('authorsTable').innerHTML = filtered.map(a => \`
+        <tr>
+          <td>
+            <a href="\${a.profileUrl}" target="_blank" class="author-name">\${a.name || a.handle}</a>
+            <div class="author-handle">@\${a.handle}</div>
+          </td>
+          <td><div class="author-bio" title="\${a.bio || ''}">\${a.bio || '-'}</div></td>
+          <td>
+            <div class="social-links">
+              <a href="\${a.twitter || '#'}" target="_blank" class="social-link twitter \${a.twitter ? '' : 'disabled'}" title="Twitter">X</a>
+              <a href="\${a.linkedin || '#'}" target="_blank" class="social-link linkedin \${a.linkedin ? '' : 'disabled'}" title="LinkedIn">in</a>
+              <a href="\${a.github || '#'}" target="_blank" class="social-link github \${a.github ? '' : 'disabled'}" title="GitHub">GH</a>
+              <a href="\${a.website || '#'}" target="_blank" class="social-link website \${a.website ? '' : 'disabled'}" title="Website">🌐</a>
+            </div>
+          </td>
+          <td>
+            <div class="keywords">
+              \${(a.matchedKeywords || []).map(k => \`<span class="keyword">\${k}</span>\`).join('')}
+            </div>
+          </td>
+        </tr>
+      \`).join('');
+    }
+
+    function filterTable() { renderTable(); }
+
+    function sortTable(field) {
+      if (sortField === field) {
+        sortAsc = !sortAsc;
+      } else {
+        sortField = field;
+        sortAsc = true;
+      }
+      renderTable();
+    }
+
+    async function startScrape() {
+      const btn = document.getElementById('scrapeBtn');
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+
+      try {
+        fetch('/api/scrape', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        setTimeout(loadData, 2000);
+      } catch (err) {
+        alert('Failed to start scrape');
+        btn.disabled = false;
+        btn.textContent = 'Run Scrape';
+      }
+    }
+
+    function downloadCSV() {
+      window.location.href = '/api/csv';
+    }
+
+    // Initial load
+    loadData();
+  </script>
 </body>
 </html>`);
 });

@@ -18,10 +18,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Store results in memory (for demo; use DB in production)
+// Store results and state in memory (for demo; use DB in production)
 let cachedResults = null;
 let lastScrapeTime = null;
 let scrapeInProgress = false;
+let scraperState = null;  // Persisted state for continuation
+let scrapeHistory = [];   // Track scrape runs
 const startTime = Date.now();
 
 // GET / - Service info
@@ -244,6 +246,11 @@ app.get('/dashboard', (req, res) => {
       border: 1px solid #3f3f46;
     }
     .btn-secondary:hover { background: #3f3f46; }
+    .btn-danger {
+      background: #dc2626;
+      color: white;
+    }
+    .btn-danger:hover { background: #b91c1c; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Stats Cards */
@@ -433,8 +440,9 @@ app.get('/dashboard', (req, res) => {
     <header class="header">
       <h1>HackerNoon Vibe Authors</h1>
       <div class="header-actions">
+        <button class="btn btn-danger" onclick="resetData()" title="Clear all data and start fresh">Reset</button>
         <button class="btn btn-secondary" onclick="downloadCSV()">Download CSV</button>
-        <button class="btn btn-primary" id="scrapeBtn" onclick="startScrape()">Run Scrape</button>
+        <button class="btn btn-primary" id="scrapeBtn" onclick="startScrape()">Continue Scrape</button>
       </div>
     </header>
 
@@ -445,6 +453,21 @@ app.get('/dashboard', (req, res) => {
         <div class="value" id="totalAuthors">-</div>
       </div>
       <div class="stat-card">
+        <div class="icon">🆕</div>
+        <div class="label">New This Run</div>
+        <div class="value" id="newAuthors">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">📄</div>
+        <div class="label">URLs Processed</div>
+        <div class="value" id="processedUrls">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">🔄</div>
+        <div class="label">Scrape Runs</div>
+        <div class="value" id="scrapeRuns">-</div>
+      </div>
+      <div class="stat-card">
         <div class="icon">🐦</div>
         <div class="label">With Twitter</div>
         <div class="value" id="withTwitter">-</div>
@@ -453,11 +476,6 @@ app.get('/dashboard', (req, res) => {
         <div class="icon">💼</div>
         <div class="label">With LinkedIn</div>
         <div class="value" id="withLinkedIn">-</div>
-      </div>
-      <div class="stat-card">
-        <div class="icon">🐙</div>
-        <div class="label">With GitHub</div>
-        <div class="value" id="withGitHub">-</div>
       </div>
     </div>
 
@@ -515,7 +533,7 @@ app.get('/dashboard', (req, res) => {
 
         if (data.success) {
           authors = data.data.authors;
-          updateStats(data.data.stats);
+          updateStats(data.data.stats, status.data);
           renderTable();
           document.getElementById('lastUpdate').textContent =
             'Last updated: ' + new Date(data.meta.cachedAt).toLocaleString();
@@ -527,11 +545,13 @@ app.get('/dashboard', (req, res) => {
       }
     }
 
-    function updateStats(stats) {
+    function updateStats(stats, statusData = {}) {
       document.getElementById('totalAuthors').textContent = stats.totalAuthors || 0;
+      document.getElementById('newAuthors').textContent = stats.newAuthorsThisRun || 0;
       document.getElementById('withTwitter').textContent = stats.withTwitter || 0;
       document.getElementById('withLinkedIn').textContent = stats.withLinkedIn || 0;
-      document.getElementById('withGitHub').textContent = stats.withGitHub || 0;
+      document.getElementById('processedUrls').textContent = statusData.processedUrls || stats.totalArticlesProcessed || 0;
+      document.getElementById('scrapeRuns').textContent = statusData.scrapeRuns || 0;
     }
 
     function updateStatus(status) {
@@ -547,9 +567,14 @@ app.get('/dashboard', (req, res) => {
         setTimeout(loadData, 5000);
       } else {
         dot.className = 'status-dot';
-        text.textContent = 'Ready';
+        if (status.hasState && status.processedUrls > 0) {
+          text.textContent = \`Ready (${status.processedUrls} URLs cached)\`;
+          btn.textContent = 'Continue Scrape';
+        } else {
+          text.textContent = 'Ready - No previous data';
+          btn.textContent = 'Start Scrape';
+        }
         btn.disabled = false;
-        btn.textContent = 'Run Scrape';
       }
     }
 
@@ -632,6 +657,26 @@ app.get('/dashboard', (req, res) => {
       window.location.href = '/api/csv';
     }
 
+    async function resetData() {
+      if (!confirm('This will clear all scraped data and start fresh. Continue?')) return;
+
+      try {
+        await fetch('/api/reset', { method: 'POST' });
+        authors = [];
+        document.getElementById('totalAuthors').textContent = '0';
+        document.getElementById('newAuthors').textContent = '0';
+        document.getElementById('processedUrls').textContent = '0';
+        document.getElementById('scrapeRuns').textContent = '0';
+        document.getElementById('withTwitter').textContent = '0';
+        document.getElementById('withLinkedIn').textContent = '0';
+        document.getElementById('authorsTable').innerHTML =
+          '<tr><td colspan="4" class="empty-state"><h3>Data Cleared</h3><p>Click "Continue Scrape" to start fresh</p></td></tr>';
+        document.getElementById('lastUpdate').textContent = 'Data reset';
+      } catch (err) {
+        alert('Failed to reset data');
+      }
+    }
+
     // Initial load
     loadData();
   </script>
@@ -676,7 +721,12 @@ app.get('/api/status', (req, res) => {
       scrapeInProgress,
       lastScrapeTime,
       hasCachedResults: !!cachedResults,
-      cachedAuthorsCount: cachedResults?.authors?.length || 0
+      cachedAuthorsCount: cachedResults?.authors?.length || 0,
+      hasState: scraperState !== null,
+      processedUrls: scraperState?.processedUrls?.length || 0,
+      processedProfiles: scraperState?.processedProfiles?.length || 0,
+      scrapeRuns: scrapeHistory.length,
+      lastRunNewAuthors: cachedResults?.stats?.newAuthorsThisRun || 0
     },
     meta: { credits: 0, processingMs: 0 }
   });
@@ -705,7 +755,7 @@ app.get('/api/results', (req, res) => {
   });
 });
 
-// POST /api/scrape - Run scraper
+// POST /api/scrape - Run scraper (supports continuation)
 app.post('/api/scrape', async (req, res) => {
   if (scrapeInProgress) {
     return res.status(409).json({
@@ -721,23 +771,46 @@ app.post('/api/scrape', async (req, res) => {
   scrapeInProgress = true;
 
   try {
-    const { keywords, tags } = req.body || {};
+    const { keywords, tags, continueMode = true, reset = false } = req.body || {};
 
-    const scraper = new HackerNoonScraper();
+    // Reset state if requested
+    if (reset) {
+      scraperState = null;
+      cachedResults = null;
+      scrapeHistory = [];
+      console.log('State reset - starting fresh');
+    }
+
+    // Create scraper with existing state for continuation
+    const scraper = new HackerNoonScraper(continueMode ? scraperState : null);
+
     const results = await scraper.scrape({
       keywords: keywords || SEARCH_KEYWORDS,
-      tags: tags || TAG_PAGES
+      tags: tags || TAG_PAGES,
+      continueMode
     });
 
+    // Save state for next continuation
+    scraperState = results.state;
     cachedResults = results;
     lastScrapeTime = new Date().toISOString();
+
+    // Track history
+    scrapeHistory.push({
+      time: lastScrapeTime,
+      newAuthors: results.stats.newAuthorsThisRun,
+      totalAuthors: results.stats.totalAuthors,
+      articlesProcessed: results.stats.articlesProcessed
+    });
 
     res.json({
       success: true,
       data: results,
       meta: {
         credits: 50,
-        processingMs: Date.now() - startMs
+        processingMs: Date.now() - startMs,
+        continued: continueMode && scraperState !== null,
+        runNumber: scrapeHistory.length
       }
     });
 
@@ -753,6 +826,35 @@ app.post('/api/scrape', async (req, res) => {
   } finally {
     scrapeInProgress = false;
   }
+});
+
+// POST /api/reset - Clear all cached data and state
+app.post('/api/reset', (req, res) => {
+  scraperState = null;
+  cachedResults = null;
+  scrapeHistory = [];
+  lastScrapeTime = null;
+
+  res.json({
+    success: true,
+    data: { message: 'All data and state cleared' },
+    meta: { credits: 0, processingMs: 0 }
+  });
+});
+
+// GET /api/history - Get scrape run history
+app.get('/api/history', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      runs: scrapeHistory,
+      totalRuns: scrapeHistory.length,
+      hasState: scraperState !== null,
+      processedUrls: scraperState?.processedUrls?.length || 0,
+      processedProfiles: scraperState?.processedProfiles?.length || 0
+    },
+    meta: { credits: 0, processingMs: 0 }
+  });
 });
 
 // GET /api/csv - Download results as CSV

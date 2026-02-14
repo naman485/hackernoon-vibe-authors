@@ -14,13 +14,27 @@ const TAG_PAGES = [
 const HACKERNOON_BASE = 'https://hackernoon.com';
 
 class HackerNoonScraper {
-  constructor() {
+  constructor(existingState = {}) {
     this.browser = null;
     this.page = null;
-    this.authorsMap = new Map();
-    this.authorArticles = new Map();
-    this.processedUrls = new Set();
-    this.seenSlugs = new Set();
+
+    // Restore state from previous scrapes for continuation
+    this.authorsMap = new Map(existingState.authorsMap || []);
+    this.authorArticles = new Map(existingState.authorArticles || []);
+    this.processedUrls = new Set(existingState.processedUrls || []);
+    this.processedProfiles = new Set(existingState.processedProfiles || []);
+    this.seenSlugs = new Set(existingState.seenSlugs || []);
+  }
+
+  // Export state for persistence
+  exportState() {
+    return {
+      processedUrls: Array.from(this.processedUrls),
+      processedProfiles: Array.from(this.processedProfiles),
+      seenSlugs: Array.from(this.seenSlugs),
+      authorsMap: Array.from(this.authorsMap.entries()),
+      authorArticles: Array.from(this.authorArticles.entries()).map(([k, v]) => [k, v])
+    };
   }
 
   async init() {
@@ -111,44 +125,54 @@ class HackerNoonScraper {
     }).catch(() => []);
   }
 
-  async collectFromSearch(keyword) {
+  async collectFromSearch(keyword, scrollCount = 5, maxArticles = 15) {
     const url = `${HACKERNOON_BASE}/search?query=${encodeURIComponent(keyword)}`;
     if (!await this.safeGoto(url)) return [];
 
     await this.delay(2500);
-    for (let i = 0; i < 3; i++) {
-      await this.page.evaluate(() => window.scrollBy(0, 800));
-      await this.delay(400);
+
+    // Deeper scrolling for more results
+    for (let i = 0; i < scrollCount; i++) {
+      await this.page.evaluate(() => window.scrollBy(0, 1000));
+      await this.delay(600);
     }
 
     let articles = await this.extractArticles();
+
+    // Filter out already processed
     articles = articles.filter(a => {
       if (this.seenSlugs.has(a.slug)) return false;
+      if (this.processedUrls.has(a.url)) return false;
       this.seenSlugs.add(a.slug);
       return true;
     });
 
-    return articles.slice(0, 8).map(a => ({ ...a, keyword, source: 'search' }));
+    return articles.slice(0, maxArticles).map(a => ({ ...a, keyword, source: 'search' }));
   }
 
-  async collectFromTag(tag) {
+  async collectFromTag(tag, scrollCount = 6, maxArticles = 20) {
     const url = `${HACKERNOON_BASE}/tagged/${tag}`;
     if (!await this.safeGoto(url)) return [];
 
     await this.delay(2000);
-    for (let i = 0; i < 4; i++) {
-      await this.page.evaluate(() => window.scrollBy(0, 800));
+
+    // Deeper scrolling for more results
+    for (let i = 0; i < scrollCount; i++) {
+      await this.page.evaluate(() => window.scrollBy(0, 1000));
       await this.delay(500);
     }
 
     let articles = await this.extractArticles();
+
+    // Filter out already processed
     articles = articles.filter(a => {
       if (this.seenSlugs.has(a.slug)) return false;
+      if (this.processedUrls.has(a.url)) return false;
       this.seenSlugs.add(a.slug);
       return true;
     });
 
-    return articles.slice(0, 10).map(a => ({ ...a, keyword: tag, source: 'tag' }));
+    return articles.slice(0, maxArticles).map(a => ({ ...a, keyword: tag, source: 'tag' }));
   }
 
   async getAuthorFromArticle(article) {
@@ -177,6 +201,10 @@ class HackerNoonScraper {
   }
 
   async getProfile(profileUrl) {
+    // Skip if already processed this profile
+    if (this.processedProfiles.has(profileUrl)) return null;
+    this.processedProfiles.add(profileUrl);
+
     if (!await this.safeGoto(profileUrl, 1)) return null;
 
     return this.page.evaluate(() => {
@@ -215,17 +243,24 @@ class HackerNoonScraper {
     const startTime = Date.now();
     const keywords = options.keywords || SEARCH_KEYWORDS;
     const tags = options.tags || TAG_PAGES;
-    const maxArticlesPerSource = options.maxArticlesPerSource || 8;
+    const scrollCount = options.scrollCount || 6;  // Deeper scrolling
+    const maxArticlesPerSearch = options.maxArticlesPerSearch || 15;
+    const maxArticlesPerTag = options.maxArticlesPerTag || 20;
+    const continueMode = options.continueMode !== false; // Default true
 
     await this.init();
 
     const allArticles = [];
     const progress = { phase: 'collecting', current: 0, total: keywords.length + tags.length };
 
+    console.log(`Starting scrape - Continue mode: ${continueMode}, Already processed: ${this.processedUrls.size} URLs`);
+
     // Collect from searches
     for (const kw of keywords) {
       progress.current++;
-      const articles = await this.collectFromSearch(kw);
+      console.log(`Searching: "${kw}" (${progress.current}/${progress.total})`);
+      const articles = await this.collectFromSearch(kw, scrollCount, maxArticlesPerSearch);
+      console.log(`  Found ${articles.length} new articles`);
       allArticles.push(...articles);
       await this.delay(1500);
     }
@@ -233,21 +268,29 @@ class HackerNoonScraper {
     // Collect from tags
     for (const tag of tags) {
       progress.current++;
-      const articles = await this.collectFromTag(tag);
+      console.log(`Tag: ${tag} (${progress.current}/${progress.total})`);
+      const articles = await this.collectFromTag(tag, scrollCount, maxArticlesPerTag);
+      console.log(`  Found ${articles.length} new articles`);
       allArticles.push(...articles);
       await this.delay(1500);
     }
+
+    console.log(`Total new articles to process: ${allArticles.length}`);
 
     progress.phase = 'extracting';
     progress.current = 0;
     progress.total = allArticles.length;
 
     // Extract authors
+    let newAuthorsCount = 0;
     for (const article of allArticles) {
       progress.current++;
       const author = await this.getAuthorFromArticle(article);
 
       if (author?.handle) {
+        const isNewAuthor = !this.authorsMap.has(author.handle);
+        if (isNewAuthor) newAuthorsCount++;
+
         if (!this.authorArticles.has(author.handle)) {
           this.authorArticles.set(author.handle, []);
         }
@@ -268,16 +311,23 @@ class HackerNoonScraper {
           this.authorsMap.get(author.handle).keywords.add(article.keyword);
         }
       }
-      await this.delay(1200);
+      await this.delay(1000);
     }
+
+    console.log(`New authors found: ${newAuthorsCount}, Total authors: ${this.authorsMap.size}`);
 
     progress.phase = 'profiles';
     const authors = Array.from(this.authorsMap.values());
     progress.current = 0;
-    progress.total = authors.length;
 
-    // Get profiles
-    for (const a of authors) {
+    // Only fetch profiles for authors we haven't processed yet
+    const authorsNeedingProfile = authors.filter(a => !this.processedProfiles.has(a.profileUrl));
+    progress.total = authorsNeedingProfile.length;
+
+    console.log(`Fetching ${authorsNeedingProfile.length} new profiles...`);
+
+    // Get profiles only for new authors
+    for (const a of authorsNeedingProfile) {
       progress.current++;
       const profile = await this.getProfile(a.profileUrl);
 
@@ -292,34 +342,46 @@ class HackerNoonScraper {
           a.name = this.cleanName(profile.name);
         }
       }
-
-      const arts = this.authorArticles.get(a.handle) || [];
-      a.sampleArticles = arts.slice(0, 3).map(x => ({
-        title: x.title,
-        url: x.url,
-        keyword: x.keyword
-      }));
-      a.matchedKeywords = Array.from(a.keywords);
-
-      if (!a.name || a.name.length < 2) a.name = a.handle;
-      delete a.keywords;
-
-      await this.delay(1200);
+      await this.delay(1000);
     }
+
+    // Finalize all authors
+    const finalAuthors = authors.map(a => {
+      const arts = this.authorArticles.get(a.handle) || [];
+      return {
+        handle: a.handle,
+        name: a.name && a.name.length >= 2 ? a.name : a.handle,
+        profileUrl: a.profileUrl,
+        bio: a.bio || '',
+        twitter: a.twitter || '',
+        linkedin: a.linkedin || '',
+        github: a.github || '',
+        website: a.website || '',
+        sampleArticles: arts.slice(0, 5).map(x => ({
+          title: x.title,
+          url: x.url,
+          keyword: x.keyword
+        })),
+        matchedKeywords: Array.from(a.keywords || [])
+      };
+    });
 
     await this.close();
 
     return {
-      authors,
+      authors: finalAuthors,
       stats: {
-        totalAuthors: authors.length,
-        withTwitter: authors.filter(a => a.twitter).length,
-        withLinkedIn: authors.filter(a => a.linkedin).length,
-        withGitHub: authors.filter(a => a.github).length,
-        withWebsite: authors.filter(a => a.website).length,
+        totalAuthors: finalAuthors.length,
+        newAuthorsThisRun: newAuthorsCount,
+        withTwitter: finalAuthors.filter(a => a.twitter).length,
+        withLinkedIn: finalAuthors.filter(a => a.linkedin).length,
+        withGitHub: finalAuthors.filter(a => a.github).length,
+        withWebsite: finalAuthors.filter(a => a.website).length,
         articlesProcessed: allArticles.length,
+        totalArticlesProcessed: this.processedUrls.size,
         processingTimeMs: Date.now() - startTime
-      }
+      },
+      state: this.exportState()
     };
   }
 }

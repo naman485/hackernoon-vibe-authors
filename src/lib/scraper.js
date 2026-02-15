@@ -6,7 +6,7 @@ const SEARCH_KEYWORDS = [
   'solo developer', 'indie developer', 'maker'
 ];
 
-const TAG_PAGES = [
+const TAG_KEYWORDS = [
   'indie-hackers', 'solopreneurship', 'bootstrapping', 'side-project',
   'startup-lessons', 'founders', 'saas', 'makers'
 ];
@@ -21,7 +21,6 @@ const USER_AGENTS = [
 
 class HackerNoonScraper {
   constructor(existingState) {
-    // Restore state from previous scrapes for continuation
     const state = existingState || {};
     this.authorsMap = new Map(state.authorsMap || []);
     this.authorArticles = new Map(state.authorArticles || []);
@@ -30,14 +29,13 @@ class HackerNoonScraper {
     this.seenSlugs = new Set(state.seenSlugs || []);
   }
 
-  // Export state for persistence
   exportState() {
     return {
       processedUrls: Array.from(this.processedUrls),
       processedProfiles: Array.from(this.processedProfiles),
       seenSlugs: Array.from(this.seenSlugs),
       authorsMap: Array.from(this.authorsMap.entries()),
-      authorArticles: Array.from(this.authorArticles.entries()).map(([k, v]) => [k, v])
+      authorArticles: Array.from(this.authorArticles.entries())
     };
   }
 
@@ -60,11 +58,9 @@ class HackerNoonScraper {
         const response = await fetch(url, {
           headers: {
             'User-Agent': this.getRandomUserAgent(),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
             'Cache-Control': 'max-age=0'
           }
         });
@@ -72,15 +68,13 @@ class HackerNoonScraper {
         if (!response.ok) {
           console.log(`  HTTP ${response.status} for ${url}`);
           if (response.status === 429) {
-            // Rate limited - wait longer
             await this.delay(5000 * (i + 1));
             continue;
           }
           return null;
         }
 
-        const html = await response.text();
-        return cheerio.load(html);
+        return await response.text();
       } catch (err) {
         console.log(`  Fetch error (attempt ${i + 1}): ${err.message}`);
         await this.delay(2000 * (i + 1));
@@ -89,131 +83,131 @@ class HackerNoonScraper {
     return null;
   }
 
-  extractArticlesFromPage($) {
-    const results = [];
-    const seen = new Set();
-
-    $('a[href]').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      if (!href.startsWith('/') || href.length < 20) return;
-
-      const skip = ['/u/', '/tagged/', '/search', '/signup', '/login', '/company/', '/write', '/c/', '/about'];
-      if (skip.some(s => href.includes(s))) return;
-      if (!href.includes('-')) return;
-
-      const parts = href.split('/').filter(Boolean);
-      if (parts.length !== 1) return;
-
-      const slug = parts[0];
-      if (seen.has(slug)) return;
-      seen.add(slug);
-
-      // Get title from the element or parent
-      let title = $(el).text().trim();
-      const parent = $(el).closest('div, article, li');
-      if (parent.length) {
-        const h = parent.find('h1, h2, h3, h4').first();
-        if (h.length && h.text().trim().length > title.length) {
-          title = h.text().trim();
-        }
+  // Extract __NEXT_DATA__ JSON from HTML
+  extractNextData(html) {
+    try {
+      const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+      if (match) {
+        return JSON.parse(match[1]);
       }
-
-      title = title.replace(/\s+/g, ' ').trim();
-      if (title.length >= 10 && title.length <= 300) {
-        results.push({ slug, title, url: HACKERNOON_BASE + '/' + slug });
-      }
-    });
-
-    return results;
+    } catch (err) {
+      console.log('  Error parsing __NEXT_DATA__:', err.message);
+    }
+    return null;
   }
 
-  async collectFromSearch(keyword, maxArticles = 15) {
-    const url = `${HACKERNOON_BASE}/search?query=${encodeURIComponent(keyword)}`;
-    console.log(`  Fetching search: ${keyword}`);
+  // Get articles from sitemap
+  async collectFromSitemap(sitemapUrl, maxArticles = 50) {
+    console.log(`  Fetching sitemap: ${sitemapUrl}`);
+    const html = await this.fetchPage(sitemapUrl);
+    if (!html) return [];
 
-    const $ = await this.fetchPage(url);
-    if (!$) return [];
+    const articles = [];
+    const urlRegex = /<loc>(https:\/\/hackernoon\.com\/[a-z0-9-]+)<\/loc>/g;
+    let match;
 
-    let articles = this.extractArticlesFromPage($);
+    while ((match = urlRegex.exec(html)) !== null) {
+      const url = match[1];
+      const slug = url.replace(HACKERNOON_BASE + '/', '');
 
-    // Filter out already processed
-    articles = articles.filter(a => {
-      if (this.seenSlugs.has(a.slug)) return false;
-      if (this.processedUrls.has(a.url)) return false;
-      this.seenSlugs.add(a.slug);
-      return true;
-    });
+      // Skip non-article URLs
+      if (slug.includes('/') || slug.startsWith('u-') || slug.startsWith('tagged-')) continue;
+      if (this.seenSlugs.has(slug)) continue;
+      if (this.processedUrls.has(url)) continue;
 
-    console.log(`    Found ${articles.length} new articles`);
-    return articles.slice(0, maxArticles).map(a => ({ ...a, keyword, source: 'search' }));
+      this.seenSlugs.add(slug);
+      articles.push({ slug, url });
+
+      if (articles.length >= maxArticles) break;
+    }
+
+    console.log(`    Found ${articles.length} new article URLs`);
+    return articles;
   }
 
-  async collectFromTag(tag, maxArticles = 20) {
-    const url = `${HACKERNOON_BASE}/tagged/${tag}`;
-    console.log(`  Fetching tag: ${tag}`);
-
-    const $ = await this.fetchPage(url);
-    if (!$) return [];
-
-    let articles = this.extractArticlesFromPage($);
-
-    // Filter out already processed
-    articles = articles.filter(a => {
-      if (this.seenSlugs.has(a.slug)) return false;
-      if (this.processedUrls.has(a.url)) return false;
-      this.seenSlugs.add(a.slug);
-      return true;
-    });
-
-    console.log(`    Found ${articles.length} new articles`);
-    return articles.slice(0, maxArticles).map(a => ({ ...a, keyword: tag, source: 'tag' }));
+  // Check if article matches keywords
+  matchesKeywords(title, excerpt, tags) {
+    const text = `${title} ${excerpt} ${(tags || []).join(' ')}`.toLowerCase();
+    return SEARCH_KEYWORDS.some(kw => text.includes(kw.toLowerCase())) ||
+           TAG_KEYWORDS.some(tag => text.includes(tag.replace(/-/g, ' ')));
   }
 
-  async getAuthorFromArticle(article) {
-    if (this.processedUrls.has(article.url)) return null;
-    this.processedUrls.add(article.url);
+  // Get author and article info from article page
+  async getArticleData(articleUrl) {
+    if (this.processedUrls.has(articleUrl)) return null;
+    this.processedUrls.add(articleUrl);
 
-    const $ = await this.fetchPage(article.url);
-    if (!$) return null;
+    const html = await this.fetchPage(articleUrl);
+    if (!html) return null;
 
-    // Find author link
-    let authorHandle = null;
-    let authorName = null;
+    const nextData = this.extractNextData(html);
+    if (!nextData) return null;
 
-    $('a[href^="/u/"]').each((_, el) => {
-      if (authorHandle) return;
-      const href = $(el).attr('href') || '';
-      const handle = href.replace('/u/', '').split('?')[0].split('/')[0];
-      if (handle && handle.length > 1 && handle.length < 50) {
-        authorHandle = handle;
-        authorName = $(el).text().trim() || handle;
+    const pageProps = nextData.props?.pageProps?.data || {};
+    const profile = pageProps.profile || {};
+
+    const title = pageProps.title || '';
+    const excerpt = pageProps.excerpt || '';
+    const tags = pageProps.tags?.map(t => t.slug || t) || [];
+
+    // Check if matches our keywords
+    if (!this.matchesKeywords(title, excerpt, tags)) {
+      return null;
+    }
+
+    if (!profile.handle) return null;
+
+    // Extract website from callToActions if available
+    let website = '';
+    if (profile.callToActions && Array.isArray(profile.callToActions)) {
+      const webCta = profile.callToActions.find(cta =>
+        cta.url && cta.active &&
+        !cta.url.includes('hackernoon.com') &&
+        !cta.url.includes('twitter.com') &&
+        !cta.url.includes('linkedin.com') &&
+        !cta.url.includes('github.com')
+      );
+      if (webCta) website = webCta.url;
+    }
+
+    // Also check adLink
+    if (!website && profile.adLink && !profile.adLink.includes('hackernoon')) {
+      website = profile.adLink;
+    }
+
+    const matchedKeywords = [];
+    for (const kw of SEARCH_KEYWORDS) {
+      if (`${title} ${excerpt}`.toLowerCase().includes(kw.toLowerCase())) {
+        matchedKeywords.push(kw);
       }
-    });
-
-    if (!authorHandle) return null;
-
-    const title = $('h1').first().text().trim() || '';
+    }
+    for (const tag of tags) {
+      if (TAG_KEYWORDS.includes(tag)) {
+        matchedKeywords.push(tag);
+      }
+    }
 
     return {
-      handle: authorHandle,
-      name: authorName,
-      profileUrl: HACKERNOON_BASE + '/u/' + authorHandle,
-      title
+      handle: profile.handle,
+      name: this.cleanName(profile.displayName || profile.handle),
+      profileUrl: HACKERNOON_BASE + '/u/' + profile.handle,
+      bio: profile.bio || '',
+      website,
+      articleTitle: title,
+      articleUrl,
+      matchedKeywords: [...new Set(matchedKeywords)]
     };
   }
 
-  async getProfile(profileUrl) {
+  // Get social links from profile page
+  async getProfileSocial(profileUrl) {
     if (this.processedProfiles.has(profileUrl)) return null;
     this.processedProfiles.add(profileUrl);
 
-    const $ = await this.fetchPage(profileUrl);
-    if (!$) return null;
+    const html = await this.fetchPage(profileUrl);
+    if (!html) return null;
 
-    let name = $('h1').first().text().trim() || '';
-    name = name.replace(/^by\s+/i, '').replace(/@\w+/g, '').trim();
-
-    let bio = $('meta[name="description"]').attr('content') || '';
-
+    const $ = cheerio.load(html);
     const social = { twitter: null, linkedin: null, github: null, website: null };
 
     $('a[href]').each((_, el) => {
@@ -236,101 +230,121 @@ class HackerNoonScraper {
       }
     });
 
-    return { name, bio, social };
+    // Also try to get name from profile page
+    let name = '';
+    const nextData = this.extractNextData(html);
+    if (nextData) {
+      const profileData = nextData.props?.pageProps?.data || {};
+      name = this.cleanName(profileData.displayName || '');
+    }
+
+    return { ...social, name };
   }
 
   async scrape(options = {}) {
     const startTime = Date.now();
-    const keywords = options.keywords || SEARCH_KEYWORDS;
-    const tags = options.tags || TAG_PAGES;
-    const maxArticlesPerSearch = options.maxArticlesPerSearch || 15;
-    const maxArticlesPerTag = options.maxArticlesPerTag || 20;
+    const maxArticlesPerSitemap = options.maxArticlesPerSitemap || 100;
+    const sitemapsToCheck = options.sitemapsToCheck || 3;
 
     console.log(`Starting scrape - Already processed: ${this.processedUrls.size} URLs`);
 
     const allArticles = [];
 
-    // Collect from searches
-    console.log('Phase 1: Searching keywords...');
-    for (const kw of keywords) {
-      const articles = await this.collectFromSearch(kw, maxArticlesPerSearch);
-      allArticles.push(...articles);
-      await this.delay(1500); // Be nice to the server
+    // Get recent sitemaps (most recent first)
+    console.log('Phase 1: Fetching articles from sitemaps...');
+    const sitemapIndex = await this.fetchPage(`${HACKERNOON_BASE}/sitemap.xml`);
+    if (sitemapIndex) {
+      const sitemapUrls = [];
+      const sitemapRegex = /<loc>(https:\/\/hackernoon\.com\/sitemaps\/sitemap-\d+)<\/loc>/g;
+      let match;
+      while ((match = sitemapRegex.exec(sitemapIndex)) !== null) {
+        sitemapUrls.push(match[1]);
+      }
+
+      // Get the most recent sitemaps (highest numbers)
+      const recentSitemaps = sitemapUrls.slice(-sitemapsToCheck).reverse();
+
+      for (const sitemapUrl of recentSitemaps) {
+        const articles = await this.collectFromSitemap(sitemapUrl, maxArticlesPerSitemap);
+        allArticles.push(...articles);
+        await this.delay(1000);
+      }
     }
 
-    // Collect from tags
-    console.log('Phase 2: Crawling tags...');
-    for (const tag of tags) {
-      const articles = await this.collectFromTag(tag, maxArticlesPerTag);
-      allArticles.push(...articles);
-      await this.delay(1500);
-    }
+    console.log(`Total articles to check: ${allArticles.length}`);
 
-    console.log(`Total new articles to process: ${allArticles.length}`);
-
-    // Extract authors
-    console.log('Phase 3: Extracting authors from articles...');
+    // Process articles and extract author data
+    console.log('Phase 2: Processing articles and finding relevant authors...');
     let newAuthorsCount = 0;
     let processedCount = 0;
+    let matchedCount = 0;
 
     for (const article of allArticles) {
       processedCount++;
-      if (processedCount % 10 === 0) {
-        console.log(`  Progress: ${processedCount}/${allArticles.length} articles`);
+      if (processedCount % 20 === 0) {
+        console.log(`  Progress: ${processedCount}/${allArticles.length} articles (${matchedCount} matched)`);
       }
 
-      const author = await this.getAuthorFromArticle(article);
+      const data = await this.getArticleData(article.url);
 
-      if (author?.handle) {
-        const isNewAuthor = !this.authorsMap.has(author.handle);
+      if (data?.handle) {
+        matchedCount++;
+        const isNewAuthor = !this.authorsMap.has(data.handle);
         if (isNewAuthor) newAuthorsCount++;
 
-        if (!this.authorArticles.has(author.handle)) {
-          this.authorArticles.set(author.handle, []);
+        if (!this.authorArticles.has(data.handle)) {
+          this.authorArticles.set(data.handle, []);
         }
-        this.authorArticles.get(author.handle).push({
-          title: author.title || article.title,
-          url: article.url,
-          keyword: article.keyword
+        this.authorArticles.get(data.handle).push({
+          title: data.articleTitle,
+          url: data.articleUrl,
+          keywords: data.matchedKeywords
         });
 
-        if (!this.authorsMap.has(author.handle)) {
-          this.authorsMap.set(author.handle, {
-            handle: author.handle,
-            name: this.cleanName(author.name),
-            profileUrl: author.profileUrl,
-            keywords: new Set([article.keyword])
+        if (!this.authorsMap.has(data.handle)) {
+          this.authorsMap.set(data.handle, {
+            handle: data.handle,
+            name: data.name,
+            profileUrl: data.profileUrl,
+            bio: data.bio,
+            website: data.website,
+            keywords: new Set(data.matchedKeywords)
           });
         } else {
-          this.authorsMap.get(author.handle).keywords.add(article.keyword);
+          const existing = this.authorsMap.get(data.handle);
+          data.matchedKeywords.forEach(kw => existing.keywords.add(kw));
+          if (data.website && !existing.website) {
+            existing.website = data.website;
+          }
         }
       }
-      await this.delay(800);
+
+      await this.delay(500);
     }
 
-    console.log(`New authors found: ${newAuthorsCount}, Total authors: ${this.authorsMap.size}`);
+    console.log(`Matched ${matchedCount} articles, found ${newAuthorsCount} new authors`);
 
-    // Get profiles for new authors
+    // Get social links for authors
     const authors = Array.from(this.authorsMap.values());
-    const authorsNeedingProfile = authors.filter(a => !a.bio && !this.processedProfiles.has(a.profileUrl));
+    const authorsNeedingSocial = authors.filter(a => !a.twitter && !a.linkedin && !this.processedProfiles.has(a.profileUrl));
 
-    console.log(`Phase 4: Fetching ${authorsNeedingProfile.length} profiles...`);
+    console.log(`Phase 3: Fetching social links for ${authorsNeedingSocial.length} profiles...`);
 
-    for (const a of authorsNeedingProfile) {
-      const profile = await this.getProfile(a.profileUrl);
+    for (const a of authorsNeedingSocial) {
+      const social = await this.getProfileSocial(a.profileUrl);
 
-      if (profile) {
-        a.bio = profile.bio?.replace(/\s+/g, ' ').trim() || '';
-        a.twitter = profile.social.twitter || '';
-        a.linkedin = profile.social.linkedin || '';
-        a.github = profile.social.github || '';
-        a.website = profile.social.website || '';
-
-        if (profile.name && profile.name.length > (a.name?.length || 0)) {
-          a.name = this.cleanName(profile.name);
+      if (social) {
+        a.twitter = social.twitter || '';
+        a.linkedin = social.linkedin || '';
+        a.github = social.github || '';
+        if (social.website && !a.website) {
+          a.website = social.website;
+        }
+        if (social.name && social.name.length > (a.name?.length || 0)) {
+          a.name = social.name;
         }
       }
-      await this.delay(800);
+      await this.delay(600);
     }
 
     // Finalize all authors
@@ -348,7 +362,7 @@ class HackerNoonScraper {
         sampleArticles: arts.slice(0, 5).map(x => ({
           title: x.title,
           url: x.url,
-          keyword: x.keyword
+          keywords: x.keywords
         })),
         matchedKeywords: Array.from(a.keywords || [])
       };
@@ -366,6 +380,7 @@ class HackerNoonScraper {
         withGitHub: finalAuthors.filter(a => a.github).length,
         withWebsite: finalAuthors.filter(a => a.website).length,
         articlesProcessed: allArticles.length,
+        articlesMatched: matchedCount,
         totalArticlesProcessed: this.processedUrls.size,
         processingTimeMs: Date.now() - startTime
       },
@@ -374,4 +389,4 @@ class HackerNoonScraper {
   }
 }
 
-module.exports = { HackerNoonScraper, SEARCH_KEYWORDS, TAG_PAGES };
+module.exports = { HackerNoonScraper, SEARCH_KEYWORDS, TAG_KEYWORDS };

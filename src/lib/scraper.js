@@ -14,16 +14,17 @@ const TAG_PAGES = [
 const HACKERNOON_BASE = 'https://hackernoon.com';
 
 class HackerNoonScraper {
-  constructor(existingState = {}) {
+  constructor(existingState) {
     this.browser = null;
     this.page = null;
 
     // Restore state from previous scrapes for continuation
-    this.authorsMap = new Map(existingState.authorsMap || []);
-    this.authorArticles = new Map(existingState.authorArticles || []);
-    this.processedUrls = new Set(existingState.processedUrls || []);
-    this.processedProfiles = new Set(existingState.processedProfiles || []);
-    this.seenSlugs = new Set(existingState.seenSlugs || []);
+    const state = existingState || {};
+    this.authorsMap = new Map(state.authorsMap || []);
+    this.authorArticles = new Map(state.authorArticles || []);
+    this.processedUrls = new Set(state.processedUrls || []);
+    this.processedProfiles = new Set(state.processedProfiles || []);
+    this.seenSlugs = new Set(state.seenSlugs || []);
   }
 
   // Export state for persistence

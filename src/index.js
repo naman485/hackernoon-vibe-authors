@@ -568,7 +568,7 @@ app.get('/dashboard', (req, res) => {
       } else {
         dot.className = 'status-dot';
         if (status.hasState && status.processedUrls > 0) {
-          text.textContent = \`Ready (${status.processedUrls} URLs cached)\`;
+          text.textContent = 'Ready (' + status.processedUrls + ' URLs cached)';
           btn.textContent = 'Continue Scrape';
         } else {
           text.textContent = 'Ready - No previous data';

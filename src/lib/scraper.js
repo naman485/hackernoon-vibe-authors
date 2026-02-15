@@ -3,12 +3,15 @@ const cheerio = require('cheerio');
 const SEARCH_KEYWORDS = [
   'vibe coding', 'indie hacker', 'solopreneur', 'solo founder',
   'bootstrapped startup', 'side project', 'build in public',
-  'solo developer', 'indie developer', 'maker'
+  'solo developer', 'indie developer', 'maker', 'bootstrap',
+  'entrepreneur', 'startup founder', 'saas founder', 'building in public',
+  'launched my', 'i built', 'my startup', 'solo entrepreneur'
 ];
 
 const TAG_KEYWORDS = [
   'indie-hackers', 'solopreneurship', 'bootstrapping', 'side-project',
-  'startup-lessons', 'founders', 'saas', 'makers'
+  'startup-lessons', 'founders', 'saas', 'makers', 'entrepreneurship',
+  'startups', 'founder-stories', 'startup', 'building-startups'
 ];
 
 const HACKERNOON_BASE = 'https://hackernoon.com';
@@ -243,8 +246,8 @@ class HackerNoonScraper {
 
   async scrape(options = {}) {
     const startTime = Date.now();
-    const maxArticlesPerSitemap = options.maxArticlesPerSitemap || 100;
-    const sitemapsToCheck = options.sitemapsToCheck || 3;
+    const maxArticlesPerSitemap = options.maxArticlesPerSitemap || 150;
+    const sitemapsToCheck = options.sitemapsToCheck || 10;
 
     console.log(`Starting scrape - Already processed: ${this.processedUrls.size} URLs`);
 
